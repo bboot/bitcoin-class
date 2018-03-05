@@ -3,8 +3,6 @@ import java.util.HashMap;
 
 public class TxHandler {
     UTXOPool utxoPool;
-    HashMap<byte[], Transaction> block;
-    static boolean haveGenesis = false;
 
     /**
      * Creates a public ledger whose current UTXOPool (collection of unspent
@@ -14,7 +12,6 @@ public class TxHandler {
     public TxHandler(UTXOPool utxoPool) {
         // IMPLEMENT THIS
         this.utxoPool = new UTXOPool(utxoPool);
-        block = new HashMap<byte[], Transaction>();
     }
 
     /**
@@ -31,51 +28,36 @@ public class TxHandler {
             return false;
         }
         double inputSum = 0.0;
-        boolean genesis = false;
-        for (Transaction.Input input : tx.getInputs()) {
-            if (input.prevTxHash == null) {
-                if (haveGenesis) {
-                    return false;
-                }
-                genesis = true;
-            } else if (genesis) {
-                // one of the inputs had a null hash
-                return false;
-            } else {
-                Transaction prevtx = block.get(input.signature);
-                if (prevtx == null) {
-                    return false;
-                }
-                Transaction.Output prev_output = prevtx.getOutput(input.outputIndex);
-                // (2) if it has a valid signature
-                if (!Crypto.verifySignature(prev_output.address,
-                                            prevtx.getRawDataToSign(input.outputIndex),
-                                            input.signature)) {
-                    return false;
-                }
-                inputSum += prev_output.value;
-            }
-        }
         UTXOPool tmpPool = new UTXOPool();
-        for (int index = 0; index < tx.numOutputs(); index++) {
-            Transaction.Output output = tx.getOutput(index);
-            // (4)
-            if (output.value < 0.0) {
+        for (int index = 0; index < tx.numInputs(); index++) {
+            Transaction.Input input = tx.getInput(index);
+            UTXO utxo = new UTXO(input.prevTxHash, input.outputIndex);
+            // (1)
+            if (!utxoPool.contains(utxo)) {
                 return false;
             }
-            inputSum -= output.value;
-            // (5)
-            if (inputSum < 0.0 && !genesis) {
+            Transaction.Output output = utxoPool.getTxOutput(utxo);
+            // (2) if it has a valid signature
+            if (!Crypto.verifySignature(output.address,
+                                        tx.getRawDataToSign(index),
+                                        input.signature)) {
                 return false;
             }
-            UTXO utxo = new UTXO(tx.getHash(), index);
+            inputSum += output.value;
             // (3)
             if (tmpPool.contains(utxo)) {
                 return false;
             }
             tmpPool.addUTXO(utxo, output);
-            // (1)
-            if (!utxoPool.contains(utxo)) {
+        }
+        for (Transaction.Output ut : tx.getOutputs()) {
+            // (4)
+            if (ut.value < 0.0) {
+                return false;
+            }
+            inputSum -= ut.value;
+            // (5)
+            if (inputSum < 0.0) {
                 return false;
             }
         }
@@ -95,11 +77,16 @@ public class TxHandler {
         			continue;
         		}
 	        validTxs.add(tx);
+            for (Transaction.Input input : tx.getInputs()) {
+                UTXO utxo = new UTXO(input.prevTxHash, input.outputIndex);
+                utxoPool.removeUTXO(utxo);
+            }
 	        for (int index = 0; index < tx.numOutputs(); index++) {
 	            UTXO utxo = new UTXO(tx.getHash(), index);
-	            utxoPool.removeUTXO(utxo);
+	            utxoPool.addUTXO(utxo, tx.getOutput(index));
 	        }
         }
-        return (Transaction[]) validTxs.toArray();
+        Transaction[] txs = new Transaction[validTxs.size()];
+        return validTxs.toArray(txs);
     }
 }
